@@ -112,6 +112,7 @@ class DeriveCollector(BaseCollector):
             await self._poll_loop()
         finally:
             self.is_connected = False
+            await self.disconnect()
 
     async def disconnect(self):
         """关闭连接"""
@@ -172,16 +173,12 @@ class DeriveCollector(BaseCollector):
             await asyncio.sleep(self._poll_interval)
 
     async def _fetch_all_tickers(self):
-        """按到期日批量获取所有期权 ticker（使用 get_tickers 批量端点）"""
-        tasks = []
+        """按到期日顺序获取所有期权 ticker，每批之间有速率控制间隔"""
         for asset in self._supported_assets:
             expiries = self._expiry_dates.get(asset, [])
             for exp in expiries:
-                tasks.append(self._fetch_tickers_batch(asset, exp))
+                await self._fetch_tickers_batch(asset, exp)
                 await asyncio.sleep(0.25)  # 速率控制：4 TPS
-
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def _fetch_tickers_batch(self, asset: str, expiry_date: str):
         """批量获取指定资产+到期日的所有期权 ticker"""
@@ -211,11 +208,22 @@ class DeriveCollector(BaseCollector):
 
     @staticmethod
     def _to_float(val):
+        """转换为 float，仅接受正数（用于价格字段）"""
         if val is None:
             return None
         try:
             v = float(val)
             return v if v > 0 else None
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _to_float_allow_negative(val):
+        """转换为 float，允许 0 和负数（用于 Greeks 等可为负的字段）"""
+        if val is None:
+            return None
+        try:
+            return float(val)
         except (ValueError, TypeError):
             return None
 
@@ -258,11 +266,11 @@ class DeriveCollector(BaseCollector):
             "underlying_price": index_price,
             "timestamp": data.get("t"),
             "greeks": {
-                "delta": tf(op.get("d")),
-                "gamma": tf(op.get("g")),
-                "theta": tf(op.get("t")),
-                "vega": tf(op.get("v")),
-                "rho": tf(op.get("r")),
+                "delta": self._to_float_allow_negative(op.get("d")),
+                "gamma": self._to_float_allow_negative(op.get("g")),
+                "theta": self._to_float_allow_negative(op.get("t")),
+                "vega": self._to_float_allow_negative(op.get("v")),
+                "rho": self._to_float_allow_negative(op.get("r")),
             } if op else None,
         }
 

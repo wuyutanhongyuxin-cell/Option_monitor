@@ -169,6 +169,11 @@ class DeribitCollector(BaseCollector):
     async def disconnect(self):
         """断开连接"""
         self.is_connected = False
+        # 取消所有未完成的 pending requests
+        for msg_id, future in self._pending_requests.items():
+            if not future.done():
+                future.cancel()
+        self._pending_requests.clear()
         if self._ws and not self._ws.closed:
             await self._ws.close()
             logger.info("[deribit] WebSocket 已关闭")
@@ -245,6 +250,8 @@ class DeribitCollector(BaseCollector):
                     await self._handle_message(data)
                 except json.JSONDecodeError:
                     logger.warning(f"[deribit] 无法解析消息: {msg.data[:100]}")
+                except Exception as e:
+                    logger.error(f"[deribit] 消息处理异常: {e}", exc_info=True)
             elif msg.type == aiohttp.WSMsgType.ERROR:
                 logger.error(f"[deribit] WebSocket 错误: {self._ws.exception()}")
                 break

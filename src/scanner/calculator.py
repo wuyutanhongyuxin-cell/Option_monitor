@@ -33,13 +33,17 @@ class ArbitrageCalculator:
             buy_fee = opp.buy_price_usd * self._get_fee(opp.buy_exchange)
             sell_fee = opp.sell_price_usd * self._get_fee(opp.sell_exchange)
 
-            # Gas 费（涉及 DEX 时）
+            # Gas 费（分别检查买卖双方是否为 DEX）
+            dex_exchanges = ("derive",)
             gas_cost = 0.0
-            if opp.buy_exchange in ("derive",) or opp.sell_exchange in ("derive",):
-                gas_cost = self._get_gas_cost("derive")
+            if opp.buy_exchange in dex_exchanges:
+                gas_cost += self._get_gas_cost(opp.buy_exchange)
+            if opp.sell_exchange in dex_exchanges:
+                gas_cost += self._get_gas_cost(opp.sell_exchange)
 
-            # 滑点估计（保守 0.5%）
-            slippage = (opp.buy_price_usd + opp.sell_price_usd) * 0.005 / 2
+            # 滑点估计（从配置读取，默认 0.5%）
+            slippage_pct = self._filters.get("slippage_percent", 0.5) / 100.0
+            slippage = (opp.buy_price_usd + opp.sell_price_usd) * slippage_pct / 2
 
             total_cost = buy_fee + sell_fee + gas_cost + slippage
 

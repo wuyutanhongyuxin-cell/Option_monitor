@@ -103,8 +103,8 @@ class TelegramAlerter:
         return True
 
     def _make_alert_key(self, opp) -> str:
-        """生成冷却键"""
-        return f"{opp.underlying}_{opp.strike}_{opp.expiry}_{opp.option_type}"
+        """生成冷却键（含交易所方向，方向翻转的机会有独立冷却）"""
+        return f"{opp.underlying}_{opp.strike}_{opp.expiry}_{opp.option_type}_{opp.buy_exchange}_{opp.sell_exchange}"
 
     async def send_opportunities(self, opportunities: list):
         """发送套利机会报警"""

@@ -71,8 +71,9 @@ class OptionNormalizer:
                 # 计算距到期天数
                 expiry_str = parsed["expiry"]
                 try:
+                    # Deribit 和 Derive 期权均在 08:00 UTC 到期结算
                     expiry_dt = datetime.strptime(expiry_str, "%Y-%m-%d").replace(
-                        hour=8, tzinfo=timezone.utc  # 8:00 UTC 到期
+                        hour=8, tzinfo=timezone.utc
                     )
                     dte = (expiry_dt - now).total_seconds() / 86400.0
                 except ValueError:
@@ -84,9 +85,10 @@ class OptionNormalizer:
                 # 提取 IV
                 iv = data.get("mark_iv")
                 if iv is not None:
-                    # Deribit 返回百分比 (如 65.0)，Derive 返回小数 (如 0.65)
-                    if exchange == "deribit" and iv > 5:
-                        iv = iv / 100.0  # 转换为小数
+                    # Deribit 始终返回百分比格式 (如 65.0 表示 65%)，无论大小一律除以 100
+                    if exchange == "deribit":
+                        iv = iv / 100.0
+                    # Derive 已经是小数格式 (如 0.65)，无需转换
 
                 opt = NormalizedOption(
                     exchange=exchange,

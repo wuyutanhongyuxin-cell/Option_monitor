@@ -129,10 +129,11 @@ class ArbMonitor:
         try:
             await asyncio.gather(
                 scan_task, report_task, *self._collector_tasks,
-                return_exceptions=True,
             )
         except asyncio.CancelledError:
             pass
+        except Exception as e:
+            self.logger.error(f"task error in gather: {e}")
 
     async def _run_collector(self, name: str, collector):
         """运行单个采集器（带错误隔离）"""
@@ -184,12 +185,14 @@ class ArbMonitor:
         # 5. 应用过滤器
         filtered = self.calculator.apply_filters(calculated)
 
-        # 6. 保存和报警
+        # 6. 保存和报警（批量 execute，最后统一 commit）
         for opp in filtered:
             await self.db.save_opportunity(opp)
             await self.db.save_paper_trade(opp)
             self._total_opportunities_today += 1
             self._total_profit_today += opp.estimated_profit_usd
+        if filtered:
+            await self.db.commit()
 
         if filtered:
             await self.alerter.send_opportunities(filtered)

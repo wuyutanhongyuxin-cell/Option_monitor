@@ -77,39 +77,77 @@ class Database:
             await self._db.close()
             self._db = None
 
+    async def commit(self):
+        """手动提交事务（用于批量操作后统一提交）"""
+        if self._db:
+            await self._db.commit()
+
     async def save_opportunity(self, opp):
-        """保存一个套利机会"""
-        await self._db.execute(
-            """INSERT INTO opportunities
-            (detected_at, underlying, strike, expiry, option_type,
-             buy_exchange, sell_exchange, buy_price, sell_price,
-             raw_spread, net_spread, net_apr, dte_days,
-             buy_depth, sell_depth, estimated_profit, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                opp.detected_at.isoformat(),
-                opp.underlying,
-                opp.strike,
-                opp.expiry,
-                opp.option_type,
-                opp.buy_exchange,
-                opp.sell_exchange,
-                opp.buy_price_usd,
-                opp.sell_price_usd,
-                opp.raw_spread_usd,
-                opp.net_spread_usd,
-                opp.net_apr_percent,
-                opp.dte_days,
-                opp.buy_size,
-                opp.sell_size,
-                opp.estimated_profit_usd,
-                "detected",
-            ),
+        """保存一个套利机会（去重：相同合约+方向在 5 分钟内只保留一条，UPDATE 而非 INSERT）"""
+        dedup_key = (opp.underlying, opp.strike, opp.expiry, opp.option_type,
+                     opp.buy_exchange, opp.sell_exchange)
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+
+        cursor = await self._db.execute(
+            """SELECT id FROM opportunities
+            WHERE underlying=? AND strike=? AND expiry=? AND option_type=?
+              AND buy_exchange=? AND sell_exchange=? AND detected_at > ?
+            LIMIT 1""",
+            (*dedup_key, cutoff),
         )
-        await self._db.commit()
+        existing = await cursor.fetchone()
+
+        if existing:
+            await self._db.execute(
+                """UPDATE opportunities SET
+                    detected_at=?, buy_price=?, sell_price=?,
+                    raw_spread=?, net_spread=?, net_apr=?, dte_days=?,
+                    buy_depth=?, sell_depth=?, estimated_profit=?
+                WHERE id=?""",
+                (
+                    opp.detected_at.isoformat(),
+                    opp.buy_price_usd, opp.sell_price_usd,
+                    opp.raw_spread_usd, opp.net_spread_usd,
+                    opp.net_apr_percent, opp.dte_days,
+                    opp.buy_size, opp.sell_size,
+                    opp.estimated_profit_usd,
+                    existing[0],
+                ),
+            )
+        else:
+            await self._db.execute(
+                """INSERT INTO opportunities
+                (detected_at, underlying, strike, expiry, option_type,
+                 buy_exchange, sell_exchange, buy_price, sell_price,
+                 raw_spread, net_spread, net_apr, dte_days,
+                 buy_depth, sell_depth, estimated_profit, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    opp.detected_at.isoformat(),
+                    opp.underlying, opp.strike, opp.expiry, opp.option_type,
+                    opp.buy_exchange, opp.sell_exchange,
+                    opp.buy_price_usd, opp.sell_price_usd,
+                    opp.raw_spread_usd, opp.net_spread_usd,
+                    opp.net_apr_percent, opp.dte_days,
+                    opp.buy_size, opp.sell_size,
+                    opp.estimated_profit_usd, "detected",
+                ),
+            )
 
     async def save_paper_trade(self, opp):
-        """保存一笔纸盘交易"""
+        """保存一笔纸盘交易（去重：同一合约+方向只开一笔 open trade）"""
+        cursor = await self._db.execute(
+            """SELECT id FROM paper_trades
+            WHERE underlying=? AND strike=? AND expiry=? AND option_type=?
+              AND buy_exchange=? AND sell_exchange=? AND status='open'
+            LIMIT 1""",
+            (opp.underlying, opp.strike, opp.expiry, opp.option_type,
+             opp.buy_exchange, opp.sell_exchange),
+        )
+        existing = await cursor.fetchone()
+        if existing:
+            return  # 已有 open trade，不重复创建
+
         await self._db.execute(
             """INSERT INTO paper_trades
             (detected_at, underlying, strike, expiry, option_type,
@@ -118,20 +156,12 @@ class Database:
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 opp.detected_at.isoformat(),
-                opp.underlying,
-                opp.strike,
-                opp.expiry,
-                opp.option_type,
-                opp.buy_exchange,
-                opp.sell_exchange,
-                opp.buy_price_usd,
-                opp.sell_price_usd,
-                opp.max_tradable_size,
-                opp.net_spread_usd,
-                "open",
+                opp.underlying, opp.strike, opp.expiry, opp.option_type,
+                opp.buy_exchange, opp.sell_exchange,
+                opp.buy_price_usd, opp.sell_price_usd,
+                opp.max_tradable_size, opp.net_spread_usd, "open",
             ),
         )
-        await self._db.commit()
 
     async def get_recent_opportunities(self, hours: int = 24) -> List[dict]:
         """获取最近 N 小时的机会"""
@@ -182,6 +212,17 @@ class Database:
             "%Y-%m-%d"
         )
 
+        # 计算实际胜率：净价差 > 0 的交易视为盈利
+        win_rate = 0.0
+        if total_trades > 0:
+            win_cursor = await self._db.execute(
+                "SELECT COUNT(*) FROM paper_trades "
+                "WHERE detected_at >= ? AND net_spread_at_entry > 0",
+                (cutoff,),
+            )
+            win_row = await win_cursor.fetchone()
+            win_rate = (win_row[0] / total_trades) * 100
+
         return {
             "period": f"{cutoff_date} ~ {now}",
             "total_trades": total_trades,
@@ -189,7 +230,7 @@ class Database:
             "avg_apr": row[2],
             "best_trade": row[3],
             "worst_trade": row[4],
-            "win_rate": 100 if total_trades > 0 else 0,  # 简化
+            "win_rate": win_rate,
             "total_detected": total_trades,
         }
 
