@@ -2,7 +2,7 @@ import abc
 import asyncio
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional
 
 logger = logging.getLogger("arb.collector")
@@ -48,8 +48,36 @@ class BaseCollector(abc.ABC):
     async def subscribe_options(self, asset: str):
         """订阅某资产的所有期权行情"""
 
+    def _cleanup_expired(self):
+        """清理缓存中已过期（DTE < 0）的合约"""
+        now = datetime.now(timezone.utc)
+        expired_keys = []
+        for key, data in self._options_cache.items():
+            # 尝试从 instrument name 解析到期日
+            parts = key.split("-")
+            if len(parts) >= 2:
+                try:
+                    # 支持 YYYYMMDD 和 DDMMMYY 格式
+                    date_part = parts[1]
+                    if len(date_part) == 8 and date_part.isdigit():
+                        expiry_dt = datetime(
+                            int(date_part[:4]), int(date_part[4:6]),
+                            int(date_part[6:8]), 8, tzinfo=timezone.utc,
+                        )
+                    else:
+                        continue  # 其他格式由 normalizer 处理
+                    if expiry_dt < now:
+                        expired_keys.append(key)
+                except (ValueError, IndexError):
+                    continue
+        for key in expired_keys:
+            del self._options_cache[key]
+        if expired_keys:
+            logger.info(f"[{self.exchange_name}] cleaned {len(expired_keys)} expired from cache")
+
     async def get_all_options(self) -> Dict[str, dict]:
         """返回当前所有活跃期权的报价快照"""
+        self._cleanup_expired()
         return dict(self._options_cache)
 
     def get_option_count(self) -> int:
@@ -83,14 +111,17 @@ class BaseCollector(abc.ABC):
             if not self._should_run:
                 break
 
-            # 自动重连（指数退避）
+            # 自动重连（指数退避，永不放弃）
             self._reconnect_attempts += 1
             if self._reconnect_attempts > self._max_reconnect_attempts:
-                logger.error(
+                # 达到最大重连次数后进入"长等待"模式，重置计数器
+                logger.warning(
                     f"[{self.exchange_name}] 达到最大重连次数"
-                    f" ({self._max_reconnect_attempts})，停止重连"
+                    f" ({self._max_reconnect_attempts})，进入长等待模式（5分钟后重试）"
                 )
-                break
+                await asyncio.sleep(300)
+                self._reconnect_attempts = 0
+                continue
 
             delay = min(
                 self._base_reconnect_delay * (2 ** (self._reconnect_attempts - 1)),
