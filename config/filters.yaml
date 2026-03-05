@@ -1,0 +1,14 @@
+filters:
+  min_net_apr_percent: 50       # 最低净年化收益率 50%
+  min_absolute_spread_usd: 0.05 # 最低绝对价差 $0.05
+  min_depth_contracts: 3        # 最低报价深度 3 张合约
+  min_dte_hours: 24             # 最低距到期时间 24 小时
+  max_dte_days: 90              # 最大距到期时间 90 天
+  max_single_leg_usd: 1000     # 单腿最大名义值 $1000
+
+scan:
+  interval_seconds: 10          # 扫描间隔（WebSocket 模式下为处理间隔）
+
+alerts:
+  cooldown_seconds: 300         # 同一机会报警冷却时间 5 分钟
+  max_alerts_per_hour: 20       # 每小时最大报警数

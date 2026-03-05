@@ -1,0 +1,54 @@
+exchanges:
+  deribit:
+    enabled: true
+    type: cex
+    base_url: "https://www.deribit.com"
+    ws_url: "wss://www.deribit.com/ws/api/v2"
+    testnet_url: "https://test.deribit.com"
+    testnet_ws_url: "wss://test.deribit.com/ws/api/v2"
+    use_testnet: true  # 开发阶段用测试网
+    supported_assets: ["BTC", "ETH"]
+    fees:
+      taker: 0.0003    # 0.03% of underlying
+      maker: 0.0003
+      settlement: 0.00015  # 0.015%
+    min_order_btc: 0.1
+    rate_limit_per_second: 20
+
+  derive:
+    enabled: true
+    type: dex
+    base_url: "https://api.lyra.finance"
+    ws_url: "wss://api.lyra.finance/ws"
+    supported_assets: ["BTC", "ETH"]
+    fees:
+      taker: 0.0005    # 0.05% 估计值
+      maker: 0.0002
+    gas_cost_estimate_usd: 5.0  # Derive L2 充提 Gas 估计
+    rate_limit_per_second: 10
+
+  okx:
+    enabled: false  # Phase 1 先不开
+    type: cex
+    supported_assets: ["BTC", "ETH", "SOL"]
+    fees:
+      taker: 0.0003
+      maker: 0.0002
+    rate_limit_per_second: 50
+
+  binance:
+    enabled: false  # 注意：Binance 期权 API 限制卖方只能是做市商
+    type: cex
+    supported_assets: ["BTC", "ETH"]
+    fees:
+      taker: 0.0003
+      maker: 0.0003
+    note: "Options writing restricted to designated market makers"
+
+  gate:
+    enabled: false
+    type: cex
+    supported_assets: ["BTC"]
+    fees:
+      taker: 0.0005
+      maker: 0.0005
